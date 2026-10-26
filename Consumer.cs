@@ -11,6 +11,12 @@ using System.Web;
 namespace GEData.Analytics
 {
     /// <summary>
+    /// Global error callback, invoked when report failed.
+    /// Parameters: (Exception err, string clientId)
+    /// </summary>
+    public delegate void GEErrorCallback(Exception err, string clientId);
+
+    /// <summary>
     /// Consumer interface
     /// </summary>
     public interface IGEConsumer
@@ -40,6 +46,10 @@ namespace GEData.Analytics
         private readonly bool _throwException;
         private readonly bool _compress;
         private readonly HttpClient _httpClient = new HttpClient();
+        /// <summary>
+        /// Global error callback, invoked when report failed; receives (err, clientId)
+        /// </summary>
+        private readonly GEErrorCallback _errorCallback;
 
 
         /// <summary>
@@ -50,14 +60,16 @@ namespace GEData.Analytics
         /// <param name="requestTimeoutSecond">http timeout</param>
         /// <param name="throwException">throw exception or not</param>
         /// <param name="compress">http compress or not</param>
+        /// <param name="errorCallback">global error callback, invoked when report failed; receives (err, clientId)</param>
         public GEBatchConsumer(string serverUrl, int batchSize, int requestTimeoutSecond,
-            bool throwException, bool compress = true)
+            bool throwException, bool compress = true, GEErrorCallback errorCallback = null)
         {
             _messageList = new List<Dictionary<string, object>>();
             _url = serverUrl;
             this._batchSize = Math.Min(MaxFlushBatchSize, batchSize);
             this._throwException = throwException;
             this._compress = compress;
+            this._errorCallback = errorCallback;
             this._requestTimeoutMillisecond = requestTimeoutSecond * 1000;
 
             _httpClient.Timeout = TimeSpan.FromMilliseconds(_requestTimeoutMillisecond);
@@ -135,6 +147,7 @@ namespace GEData.Analytics
                         catch (Exception exception)
                         {
                            allOK=false;
+                            ReportError(exception, key);
                             if (_throwException)
                             {
                                 throw new SystemException("Failed to serialize data.", exception);
@@ -149,6 +162,7 @@ namespace GEData.Analytics
                         catch (Exception exception)
                         {
                             allOK = false;
+                            ReportError(exception, key);
                             if (_throwException)
                             {
                                 throw new SystemException("Failed to send message with BatchConsumer.", exception);
@@ -203,6 +217,27 @@ namespace GEData.Analytics
             }
         }
 
+        /// <summary>
+        /// Invoke the global error callback when report failed
+        /// </summary>
+        /// <param name="err">error</param>
+        /// <param name="clientId">client_id of the failed report</param>
+        private void ReportError(Exception err, string clientId)
+        {
+            if (_errorCallback == null)
+            {
+                return;
+            }
+            try
+            {
+                _errorCallback(err, clientId);
+            }
+            catch (Exception e)
+            {
+                GELog.Log("error callback failed: {0}", e);
+            }
+        }
+
         public void Close()
         {
             Flush();
@@ -217,17 +252,23 @@ namespace GEData.Analytics
     {
         private readonly string _url;
         private readonly HttpClient _httpClient = new HttpClient();
+        /// <summary>
+        /// Global error callback, invoked when report failed; receives (err, clientId)
+        /// </summary>
+        private readonly GEErrorCallback _errorCallback;
 
 
         /// <summary>
         /// Init debug consumer
         /// </summary>
         /// <param name="serverUrl">server url</param>
-        public GEDebugConsumer(string serverUrl)
+        /// <param name="errorCallback">global error callback, invoked when report failed; receives (err, clientId)</param>
+        public GEDebugConsumer(string serverUrl, GEErrorCallback errorCallback = null)
         {
             GELog.Log("Init debug consumer. ServerUrl: {0}", serverUrl);
 
-            _url = serverUrl; 
+            _url = serverUrl;
+            _errorCallback = errorCallback;
 
             _httpClient.Timeout = TimeSpan.FromMilliseconds(60000);
             _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Content-Type", "application/json");
@@ -235,7 +276,9 @@ namespace GEData.Analytics
 
         public  void Send(Dictionary<string, object> message)
         {
-
+            string clientId = message != null && message.ContainsKey("client_id")
+                ? message["client_id"]?.ToString()
+                : null;
             try
             {
                 var sendingData = JsonConvert.SerializeObject(message);
@@ -244,7 +287,29 @@ namespace GEData.Analytics
             }
             catch (Exception exception)
             {
+                ReportError(exception, clientId);
                 throw new SystemException("Failed to send message with DebugConsumer.", exception);
+            }
+        }
+
+        /// <summary>
+        /// Invoke the global error callback when report failed
+        /// </summary>
+        /// <param name="err">error</param>
+        /// <param name="clientId">client_id of the failed report</param>
+        private void ReportError(Exception err, string clientId)
+        {
+            if (_errorCallback == null)
+            {
+                return;
+            }
+            try
+            {
+                _errorCallback(err, clientId);
+            }
+            catch (Exception e)
+            {
+                GELog.Log("error callback failed: {0}", e);
             }
         }
 
